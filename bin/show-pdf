@@ -1,0 +1,10 @@
+#!/bin/bash
+
+if which xdg-open 2>/dev/null >/dev/null; then
+	xdg-open $1 2>/dev/null >/dev/null &
+elif which gio 2>/dev/null >/dev/null; then
+	gio open $1 2>/dev/null >/dev/null
+else
+	echo 1>&2 need either xdg-open or gio
+	exit 1
+fi

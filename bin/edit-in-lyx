@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+
+import re
+from sys import stdin, stdout
+from tempfile import TemporaryDirectory
+from subprocess import run, PIPE
+from pathlib import Path
+
+
+def shell(cmd, stderr=PIPE):
+    result = run(cmd, shell=True, stderr=stderr)
+    if result.returncode:
+        raise RuntimeError(result)
+
+
+def all_equal(seq):
+    i = seq[0]
+    return all(i == j for j in seq[1:])
+
+
+full_document = """ \
+\\documentclass{{article}}
+\\begin{{document}}
+{}
+\\end{{document}}
+""".format
+leading_whitespace = re.compile('(^[ \t]*)(?:[^ \t\n])', re.MULTILINE).findall
+
+
+with TemporaryDirectory() as tmpdir:
+    tmpdirpath = Path(tmpdir)
+    lyxpath = tmpdirpath / 'file.lyx'
+    texpath = tmpdirpath / 'file.tex'
+
+    code = stdin.read()
+    prefixes = leading_whitespace(code)
+    if prefixes:
+        i = min(len(p) for p in prefixes)
+        prefixes = [ p[:i] for p in prefixes ]
+        while not all_equal(prefixes):
+            i -= 1
+            prefixes = [ p[:i] for p in prefixes ]
+        prefix = prefixes[0]
+    else:
+        prefix = ''
+
+    texpath.write_text(full_document(code))
+
+    try:
+        shell(f"tex2lyx {texpath} {lyxpath}")
+        shell(f"lyx --no-remote {lyxpath}")
+        shell(f"lyx --no-remote --export-to latex {texpath} {lyxpath}")
+    except RuntimeError as e:
+        print(f"% {e}")
+
+    full_code = texpath.read_text()
+    do_print = False
+    lines = full_code.split('\n')
+    i = lines.index(r'\begin{document}') + 1
+    j = lines.index(r'\end{document}', i) - 1
+    while not lines[j]:
+        j -= 1
+    stdout.write('\n'.join(f'{prefix}{line}' for line in lines[i:j + 1]))

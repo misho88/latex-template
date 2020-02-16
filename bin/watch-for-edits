@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+
+import argparse
+from sys import stdout, stderr
+from pathlib import Path
+from inotify_simple import INotify, flags
+from subprocess import run
+from termcolor import colored
+
+parser = argparse.ArgumentParser(
+    description=f'watch a file and run a command in response to edits'
+)
+parser.add_argument('--file', '-f', required=True, type=Path,
+    help='the file to watch')
+parser.add_argument('--command', '-c', required=True,
+    help='the command to run')
+args = parser.parse_args()
+
+assert args.file.exists(), f"{args.file} does not exist"
+
+inotify = INotify()
+
+try:
+    while True:
+        watchdog = inotify.add_watch(args.file, flags.MODIFY)
+        for event in inotify.read():
+            pass
+        res = run(args.command, shell=True, capture_output=True)
+        if res.returncode:
+            print(res.stdout.decode(), file=stdout)
+            print(res.stderr.decode(), file=stderr)
+            print(colored(
+                f"WARNING: {args.command} did not complete successfully",
+                'red',
+                attrs=['bold'],
+            ), file=stderr)
+except KeyboardInterrupt:
+    pass
