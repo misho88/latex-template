@@ -1,6 +1,19 @@
 \documentclass{article}
+% make fonts come out properly in broad cases
 \usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{babel}
+
+% pictures
 \usepackage{graphicx}
+
+% math
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{units}
+
+% auto-style references
+\usepackage{refstyle}
 
 \title{Template Title}
 \author{Template Author}
@@ -9,13 +22,20 @@
 \begin{document}
 \maketitle
 
-Template Body
+Template Body \cite{lamport1994latex}. See \Figref{plots}.
 
-\begin{center}
-\includegraphics[width=0.49\textwidth]{plots/pdf_plot_1.pdf}
-\includegraphics[width=0.49\textwidth]{plots/pdf_plot_2.pdf}
+\begin{figure}
+	\begin{center}
+	\includegraphics[width=0.49\textwidth]{plots/pdf_plot_1.pdf}
+	\includegraphics[width=0.49\textwidth]{plots/pdf_plot_2.pdf}
 
-\includegraphics[width=0.49\textwidth]{plots/svg_plot_1.pdf}
-\includegraphics[width=0.49\textwidth]{plots/svg_plot_2.pdf}
-\par\end{center}
+	\includegraphics[width=0.49\textwidth]{plots/svg_plot_1.pdf}
+	\includegraphics[width=0.49\textwidth]{plots/svg_plot_2.pdf}
+	\par\end{center}
+
+	\caption{\label{fig:plots}Some automatically-generated plots.}
+\end{figure}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
 \end{document}
