@@ -1,0 +1,385 @@
+#!/usr/bin/env python3
+
+"""Searches Google Scholar and gives back a BibTeX citation
+
+Users can add BibTeX bibliographies like this:
+
+$ scholar.py -o references.bib search tokens
+
+which brings up a few search results and the user picks the one they want.
+
+The way to get a citation normally goes a bit like this:
+
+1. Search Scholar
+2. Find an article
+3. Go to the article and decide it is useful.
+4. Somehow get back to Scholar
+5. Click the quote-looking symbol
+6. Click BibTeX
+7. Select All
+8. Copy
+9. Go to your references.bib (or whatever) file.
+10. Paste
+11. Save
+
+And with this utility, it turns into something like:
+
+1. Search Scholar
+2. Find an article
+3. Go to the article and decide it is useful.
+4. Copy enough of its title.
+5. In a terminal: $ scholar -ao references.bib `xclip -selection clipboard -out`
+   or paste manually`
+6. Confirm the right article's been picked and hit ENTER.
+
+A selection of the first page of results comes up, the user chooses the result,
+then its citation is pulled and appended to references.bib.
+"""
+
+import argparse
+
+EPILOG = """\
+In the interactive list:
+Down/Up, J/K and j/k move through the list.
+0-9 jumps to item 0-9.
+Space/Enter looks up the selected item.
+Escape/Q/q exits without looking up the item.
+
+Non-interactively (i.e., if you're feeling lucky in the Google sense):
+$ gscholar -n 2 "query" -o references.bib
+Or more explicitly:
+$ echo "query" | gscholar -n 2 >> references.bib
+
+In Vim, enter a query on its own line:
+    oFancy Title by Author<esc>
+then replace it with a search result or two:
+    :.!gscholar -n 2<return>
+or be more explicit and highlight the query instead (don't erase the "'<,'>"):
+    V:!gscholar -n 2<return>
+Interactive operation within Vim will fail since Vim is using curses already.\
+"""
+
+parser = argparse.ArgumentParser(
+    description='Look Up Citations in Google Scholar',
+    epilog=EPILOG,
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+)
+parser.add_argument('query', nargs='*',
+    help='search string (leave blank to use stdin)')
+parser.add_argument('--output', '-o', default='-',
+    help='where to append the result (omit or - for stdout)')
+parser.add_argument('--count', '-n', default=0, type=int, choices=list(range(11)),
+    help="how many results to grab (0 to get an interactive popup); each "
+         "citation is a separate request to Google, so if you don't want to "
+         "get blocked, maybe go easy")
+
+try:
+    import argcomplete
+    argcomplete.autocomplete(parser)
+except ModuleNotFoundError as e:
+    if e.name != 'argcomplete':
+        raise
+
+args = parser.parse_args()
+
+# something to keep Scholar from kicking us off too quickly
+# modified from Edmund Matrin's blog post:
+# https://edmundmartin.com/random-user-agent-requests-python/
+try:
+    import fake_useragent
+
+    def random_headers():
+        return {
+            'User-Agent': random_headers.agent.random,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        }
+    random_headers.agent = fake_useragent.UserAgent()
+except ModuleNotFoundError as e:
+    import random
+    if e.name != 'fake_useragent':
+        raise
+
+    def random_headers():
+        return {
+            'User-Agent': random.choice(random_headers.desktop_agents),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        }
+    random_headers.desktop_agents = [
+        'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_1) AppleWebKit/602.2.14 (KHTML, like Gecko) Version/10.0.1 Safari/602.2.14',
+        'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.98 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.98 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; WOW64; rv:50.0) Gecko/20100101 Firefox/50.0',
+    ]
+
+import sys
+import curses
+from signal import signal, SIGWINCH
+from urllib.parse import quote_plus
+import requests
+from lxml import html, etree
+from sys import stderr, exit
+import textwrap
+
+
+class CursesGUI:
+    """draws the interactive list"""
+
+    def __init__(self, items):
+        """build the list
+
+        Args:
+            items: items to put in the list (list of blocks of text)
+        """
+        self.items = [ item.split('\n') for item in items ]
+        self.item_lens = [ len(item) for item in self.items ]
+        self.item_offsets = [ sum(self.item_lens[:i]) for i in range(len(self.item_lens)) ]
+        self.running = False
+        self.selected_item = 0
+        self.anchor = self.selected_item
+        self.last_key = None
+
+    def force_redraw(self):
+        """redraw the screen somewhat forcefully
+
+        While the terminal is being resized, there's a chance redrawing will
+        fail. This just keeps trying. It seems to work sooner or later.
+        """
+        redrawn = False
+        while not redrawn:
+            try:
+                self.redraw()
+                redrawn = True
+            except curses.error:
+                pass
+
+    def redraw(self):
+        """draw the list to the curses canvas"""
+        rows, cols = self.screen.getmaxyx()
+        self.screen.clear()
+        self.screen.border()
+
+        self.height = rows - 1
+        self.width = cols - 1
+
+        if self.last_key is not None:
+            label = f"{repr(self.last_key)}"
+            self.screen.addstr(rows - 2, cols - len(label) - 2, label)
+            self.last_key = None
+
+        self.screen.refresh()
+
+        self.listbox = curses.newpad(sum(self.item_lens), self.width)
+        for i, (item, item_len, item_offset) in enumerate(zip(
+            self.items,
+            self.item_lens,
+            self.item_offsets,
+        )):
+            i_str = str(i)
+            for j, line in enumerate(item):
+                self.listbox.addstr(
+                    item_offset + j,
+                    0,
+                    f'{i_str:>4} {line:<{self.width - 6}}'[:self.width - 1],
+                    curses.A_STANDOUT if i == self.selected_item else curses.A_NORMAL
+                )
+                i_str = ''
+
+        if self.selected_item >= self.anchor + self.height:
+            self.anchor = self.selected_item - self.height + 1
+        elif self.selected_item < self.anchor:
+            self.anchor = self.selected_item
+        self.listbox.refresh(self.anchor, 1, 1, 1, rows - 2, cols)
+
+    def update_screen_size(self, signum, frame):
+        """updates on screen resize
+
+        This should get called on SIGWINCH
+
+        Args:
+            signum: unused interrupt handler argument
+            frame: unused interrupt handler argument
+        """
+        curses.endwin()
+        self.screen.refresh()
+        self.force_redraw()
+
+    def handle_input(self, key):
+        """defines behavior on user input
+
+        Args:
+            key: the key the user's pressed
+        """
+        rows, cols = self.screen.getmaxyx()
+        if key in ('q', 'Q', '\x1b'):
+            self.running = False
+            self.selected_item = None
+            return
+
+        if key in (' ', '\n'):
+            self.running = False
+            return
+
+        if key in "0123456789"[:len(self.items)]:
+            self.selected_item = int(key)
+            return
+
+        increment = {
+            'KEY_DOWN': +1,
+            'j'       : +1,
+            'J'       : +1,
+            'KEY_UP'  : -1,
+            'k'       : -1,
+            'K'       : -1,
+        }.get(key, 0)
+
+        self.selected_item += increment
+        self.selected_item %= len(self.items)
+
+        self.last_key = key
+
+    def main_loop(self):
+        """show the curses canvas"""
+        self.screen = curses.initscr()
+        self.screen.keypad(True)
+        previous_signal = signal(SIGWINCH, self.update_screen_size)
+        self.running = True
+        curses.noecho()
+        curses.cbreak()
+        try:
+            self.redraw()
+            while self.running:
+                try:
+                    self.handle_input(self.screen.getkey())
+                except curses.error as e:
+                    if e.args != ('no input',):
+                        raise
+                if self.running:
+                    self.force_redraw()
+        finally:
+            signal(SIGWINCH, previous_signal)
+            curses.nocbreak()
+            self.screen.keypad(False)
+            curses.echo()
+            curses.endwin()
+
+
+def as_text(c):
+    """How to turn results into friendly text for the interactive list
+
+    Args:
+        c: the result (a dictionary)
+
+    Returns:
+        formatted result
+    """
+    return textwrap.dedent(f"""\
+        {c['title']}
+            {c['authors']}
+    """)
+
+
+def parse_result(result):
+    """parse the XML result, extracting relevant information
+
+    Args:
+        result: an etree
+
+    Returns:
+        a dictionary with the collected information
+    """
+    collected = { 'title': None, 'authors': None, 'id': None }
+
+    ri, = result.xpath('div[@class="gs_ri"]')
+    rt, = ri.xpath('h3[@class="gs_rt"]')
+    collected['title'] = rt.text_content()
+    try:
+        anchor, = rt.xpath('a')
+        result_id = anchor.attrib['id']
+    except ValueError:
+        span, = rt.xpath('span[@id]')
+        result_id = span.attrib['id']
+    collected['id'] = result_id
+
+    download_uris = []
+    for div in result.xpath('div[@class="gs_ggs gs_fl"]'):
+        anchors = div.xpath('.//a')
+        download_uris += [ anchor.attrib['href'] for anchor in anchors ]
+    collected['download'] = download_uris
+
+    a, = ri.xpath('div[@class="gs_a"]')
+    collected['authors'] = a.text_content()
+    collected['citations'] = cite_uri(result_id=result_id)
+
+    return collected
+
+
+# functions that will yield the correct URI for searching and for getting
+# a curation's result
+search_uri = "https://scholar.google.com/scholar?q={query}".format
+cite_uri = "https://scholar.google.com/scholar?q=info:{result_id}:scholar.google.com/&output=cite".format
+
+# put together a URI-friendy search query
+if args.query:
+    query = quote_plus(' '.join(args.query))
+else:
+    query = sys.stdin.read()
+
+# get the search page and build an element tree
+search_page = requests.get(search_uri(query=query), headers=random_headers())
+search_tree = html.fromstring(search_page.text)
+
+# pull the results elements from the tree
+results = [
+    parse_result(r)
+    for r in search_tree.xpath('//div[@class="gs_r gs_or gs_scl"]')
+]
+
+# Maybe there were none
+if not results:
+    print("No results found. Sorry.", file=stderr)
+    gs_rs = search_tree.xpath('//div[@class="gs_r"]')
+    if gs_rs:
+        for gs_r in gs_rs:
+            print(gs_r.text_content())
+    else:
+        print(etree.dump(search_tree.xpath('//body')[0]))
+    exit(-1)
+
+if args.count == 0:
+    # show the interactive list
+    gui = CursesGUI([ as_text(r) for r in results ])
+    gui.main_loop()
+
+    # exit if the user made no selection
+    if gui.selected_item is None:
+        exit(-2)
+
+    selections = [ gui.selected_item ]
+else:
+    selections = list(range(1, 1 + args.count))
+
+for selection in selections:
+    # get the citations page for the selection
+    result = None
+    cite_page = requests.get(results[selection]['citations'], headers=random_headers())
+    cite_tree = html.fromstring(cite_page.text)
+    anchors = cite_tree.xpath('//a[@class="gs_citi"]')
+    for anchor in anchors:  # find the BibTex link
+        reftype = anchor.text_content()
+        if reftype == 'BibTeX':
+            result = requests.get(anchor.attrib['href']).text
+    if result is None:
+        exit(-3)
+    if args.output == '-':
+        print(result)
+    else:
+        with open(args.output, 'a') as file:
+            print(result, file=file)
+            first_line = result.split("\n")[0]
+            print(f'Saved to {args.output} as {first_line} ...')
