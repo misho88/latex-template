@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+
+from subprocess import run
+from sys import argv, stdin, stdout, stderr, exit
+from PyQt5 import QtGui, QtWidgets, QtWebKitWidgets  # , QtCore
+
+latex = stdin.read()
+stdout.write(latex)
+
+result = run(
+    [ 'pandoc', '-f', 'latex', '--mathml' ],
+    input=latex.encode(),
+    capture_output=True,
+)
+
+if result.returncode:
+    print(result.stderr, file=stderr)
+    exit(result.returncode)
+
+body = result.stdout.decode()
+
+html_fmt = """\
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<html>
+    <head>
+        <title>{latex}</title>
+    </head>
+    <body style="background-color: black; -webkit-filter: invert(100%)">
+        {body}
+    </body>
+</html>
+""".format
+
+#from tempfile import NamedTemporaryFile
+#import webbrowser
+#with NamedTemporaryFile() as page:
+#    page.write(html_fmt(latex=latex, body=body).encode())
+#    page.flush()
+#    webbrowser.open(page.name)
+
+#exit(0)
+
+app = QtWidgets.QApplication(argv)
+
+view = QtWebKitWidgets.QWebView()
+view.setWindowTitle('preview')
+view.setContent(html_fmt(latex=latex, body=body).encode())
+view.setZoomFactor(2.0)
+view.show()
+
+ks_esc = QtGui.QKeySequence('Esc')
+shortcut = QtWidgets.QShortcut(ks_esc, view)
+shortcut.activated.connect(view.close)
+
+app.exec()

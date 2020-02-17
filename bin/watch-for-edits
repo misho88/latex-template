@@ -14,6 +14,10 @@ parser.add_argument('--file', '-f', required=True, type=Path,
     help='the file to watch')
 parser.add_argument('--command', '-c', required=True,
     help='the command to run')
+parser.add_argument('--quiet', '-q', default=False, action='store_true',
+    help='no output if everything goes okay')
+parser.add_argument('--quiet-on-error', '-e', default=False, action='store_true',
+    help='no output even if there is an error (no effect without -q)')
 args = parser.parse_args()
 
 assert args.file.exists(), f"{args.file} does not exist"
@@ -25,8 +29,8 @@ try:
         watchdog = inotify.add_watch(args.file, flags.MODIFY)
         for event in inotify.read():
             pass
-        res = run(args.command, shell=True, capture_output=True)
-        if res.returncode:
+        res = run(args.command, shell=True, capture_output=args.quiet)
+        if res.returncode and not args.quiet_on_error:
             print(res.stdout.decode(), file=stdout)
             print(res.stderr.decode(), file=stderr)
             print(colored(
