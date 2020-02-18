@@ -2,7 +2,7 @@
 
 import re
 from sys import stdin, stdout
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, NamedTemporaryFile
 from subprocess import run, PIPE
 from pathlib import Path
 
@@ -26,11 +26,12 @@ full_document = """ \
 """.format
 leading_whitespace = re.compile('(^[ \t]*)(?:[^ \t\n])', re.MULTILINE).findall
 
-
-with TemporaryDirectory() as tmpdir:
-    tmpdirpath = Path(tmpdir)
-    lyxpath = tmpdirpath / 'file.lyx'
-    texpath = tmpdirpath / 'file.tex'
+with \
+    NamedTemporaryFile(dir='.') as lyxfile, \
+    NamedTemporaryFile(dir='.') as texfile \
+:
+    lyxpath = Path(lyxfile.name)
+    texpath = Path(texfile.name)
 
     code = stdin.read()
     prefixes = leading_whitespace(code)
@@ -47,9 +48,10 @@ with TemporaryDirectory() as tmpdir:
     texpath.write_text(full_document(code))
 
     try:
-        shell(f"tex2lyx {texpath} {lyxpath}")
+        shell(f"tex2lyx -f {texpath} {lyxpath}")
         shell(f"lyx --no-remote {lyxpath}")
         shell(f"lyx --no-remote --export-to latex {texpath} {lyxpath}")
+        shell(f"rm -f '{lyxpath}~'")
     except RuntimeError as e:
         print(f"% {e}")
 

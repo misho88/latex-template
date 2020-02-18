@@ -32,15 +32,6 @@ html_fmt = """\
 </html>
 """.format
 
-#from tempfile import NamedTemporaryFile
-#import webbrowser
-#with NamedTemporaryFile() as page:
-#    page.write(html_fmt(latex=latex, body=body).encode())
-#    page.flush()
-#    webbrowser.open(page.name)
-
-#exit(0)
-
 app = QtWidgets.QApplication(argv)
 
 view = QtWebKitWidgets.QWebView()
