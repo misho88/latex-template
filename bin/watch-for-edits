@@ -31,8 +31,10 @@ try:
             pass
         res = run(args.command, shell=True, capture_output=args.quiet)
         if res.returncode and not args.quiet_on_error:
-            print(res.stdout.decode(), file=stdout)
-            print(res.stderr.decode(), file=stderr)
+            if res.stdout:
+                print(res.stdout.decode(), file=stdout)
+            if res.stderr:
+                print(res.stderr.decode(), file=stderr)
             print(colored(
                 f"WARNING: {args.command} did not complete successfully",
                 'red',
