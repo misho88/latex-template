@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
-from sys import stdout, stderr
+from sys import stdout, stderr, exit
 from pathlib import Path
-from inotify_simple import INotify, flags
 from subprocess import run
 from termcolor import colored
 
@@ -22,13 +21,12 @@ args = parser.parse_args()
 
 assert args.file.exists(), f"{args.file} does not exist"
 
-inotify = INotify()
-
 try:
     while True:
-        watchdog = inotify.add_watch(args.file, flags.MODIFY)
-        for event in inotify.read():
-            pass
+        res = run([ 'inotifywait', '-e', 'modify', '-e', 'move_self', str(args.file) ])
+        if res.returncode:
+            print(res, "something went wrong, exiting", sep='\n', file=stderr)
+            exit(1)
         res = run(args.command, shell=True, capture_output=args.quiet)
         if res.returncode and not args.quiet_on_error:
             if res.stdout:
